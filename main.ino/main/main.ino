@@ -1,19 +1,27 @@
 #include <Wire.h>
-#include <SD.h>
 
 #include "WiFiEsp.h"
 #include "PubSubClient.h"
 
+#define _ESPLOGLEVEL_ 1
+
 // NETWORK
 const char* ssid = "608-wifi";            // your network SSID (name)
 const char* pass = "19950729";        // your network password
-const char* mqtt_server = "52.69.61.180";
+const char* mqtt_server = "192.168.0.17";
+//const char* mqtt_server = "52.194.252.52";
 const char* mqtt_topic = "topic";
+//const char* tcp_test = "52.194.252.52";
+const char* tcp_test = "192.168.0.17";
 
+bool isEnd = false;
 int status = WL_IDLE_STATUS;     // the Wifi radio's status
 
 WiFiEspClient client;
 PubSubClient mqttClient(client);
+
+int wifi_status = WL_IDLE_STATUS;
+long lastReconnectAttempt = 0;
 
 long lastMsg = 0;
 char msg[50];
@@ -30,8 +38,8 @@ const int BUFFERLENGTH = 255;
 char IncomingByte[BUFFERLENGTH];   // for incoming serial data
 
 // VGA Default 
-int PHOTO_WIDTH  =  640;   
-int PHOTO_HEIGHT =  480; 
+int PHOTO_WIDTH  =  1280; //640   
+int PHOTO_HEIGHT =  240; //480
 int PHOTO_BYTES_PER_PIXEL = 2;
 
 // Command and Parameter related Strings
@@ -78,17 +86,6 @@ ResolutionType Resolution = None;
 #define Led_Red   2
 #define Led_Green 4
 #define Led_Blue  6
-
-// SDCARD
-// MISO, MOSI, and SCK are also available in a consistent physical location on the ICSP header; 
-// this is useful, for example, in designing a shield that works on the Uno and the Mega. 
-// On the Arduino Mega, this is 
-// 50 (MISO) 
-// 51 (MOSI) 
-// 52 (SCK) 
-// 53 (SS) 
-
-
 
 // Register addresses and values
 #define CLKRC                 0x11 
@@ -1623,7 +1620,6 @@ void SetupCameraDenoise()
    Serial.println(sresult);
 }
 
-
 void SetupCameraEdgeEnhancement()
 {
    int result = 0;
@@ -1646,8 +1642,6 @@ void SetupCameraEdgeEnhancement()
    Serial.print(F("REG76: "));
    Serial.println(sresult);
 }
-
-
 
 void SetupCameraDenoiseEdgeEnhancement()
 {
@@ -1779,7 +1773,6 @@ void SetCameraGamma()
 */
 
 
-
 void SetupCameraArrayControl()
 {
    int result = 0;
@@ -1797,7 +1790,6 @@ void SetupCameraArrayControl()
    Serial.print(F("ARBLM: "));
    Serial.println(sresult);
 }
-
 
 
 void SetupCameraADCControl()
@@ -1832,8 +1824,6 @@ void SetupCameraADCControl()
    Serial.print(F("OFON: "));
    Serial.println(sresult);  
 }
-
-
 
 void SetupOV7670ForQQVGAYUV()
 {
@@ -2080,112 +2070,90 @@ String CreatePhotoFilename()
   return Filename;
 }
 
-String CreatePhotoInfoFilename()
-{
-  String Filename = "";
-  String Ext = "";
-  
-  // Creates filename that the information about the photo will 
-  // be saved under. 
-  
-  // Create file extension
-  Ext = ".txt";
-  
-  // Create Filename from
-  // Resolution + PhotoNumber + Extension
-  Filename = Command + PhotoTakenCount + Ext; 
- 
-  return Filename;
-}
 
-String CreatePhotoInfo()
-{
-  String Info = "";
-  
-  Info = Command + " " + FPSParam + " " + AWBParam + " " + AECParam + " " + YUVMatrixParam + " " + 
-         DenoiseParam + " " + EdgeParam + " " + ABLCParam;
-         
-  return Info;
-}
+long readVcc() {
+  // Read 1.1V reference against AVcc
+  // set the reference to Vcc and the measurement to the internal 1.1V reference
+  #if defined(__AVR_ATmega32U4__) || defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
+    ADMUX = _BV(REFS0) | _BV(MUX4) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
+  #elif defined (__AVR_ATtiny24__) || defined(__AVR_ATtiny44__) || defined(__AVR_ATtiny84__)
+    ADMUX = _BV(MUX5) | _BV(MUX0);
+  #elif defined (__AVR_ATtiny25__) || defined(__AVR_ATtiny45__) || defined(__AVR_ATtiny85__)
+    ADMUX = _BV(MUX3) | _BV(MUX2);
+  #else
+    ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
+  #endif  
 
+  delay(2); // Wait for Vref to settle
+  ADCSRA |= _BV(ADSC); // Start conversion
+  while (bit_is_set(ADCSRA,ADSC)); // measuring
+
+  uint8_t low  = ADCL; // must read ADCL first - it then locks ADCH  
+  uint8_t high = ADCH; // unlocks both
+
+  long result = (high<<8) | low;
+
+  result = 1125300L / result; // Calculate Vcc (in mV); 1125300 = 1.1*1023*1000
+  return result; // Vcc in millivolts
+}
 
 ////////////////////// MQTT //////////////////
 void callback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  for (int i = 0; i < length; i++) {
-    Serial.print((char)payload[i]);
-  }
-  Serial.println();
-
-  // Switch on the LED if an 1 was received as first character
-  if ((char)payload[0] == '1') {
-    //digitalWrite(BUILTIN_LED, LOW);   // Turn the LED on (Note that LOW is the voltage level
-    // but actually the LED is on; this is because
-    // it is active low on the ESP-01)
-    Serial.println(payload[0]);
-  } else {
-    //digitalWrite(BUILTIN_LED, HIGH);  // Turn the LED off by making the voltage HIGH
-  }
+    Serial.print("Message arrived [");
+    Serial.print(topic);
+    Serial.print("] ");
+    for (int i = 0; i < length; i++) {
+      Serial.print((char)payload[i]);
+    }
+    Serial.println();
+  
+    // Switch on the LED if an 1 was received as first character
+    if ((char)payload[0] == 'A' && (char)payload[1] == 'T') {
+      // Take Photo
+      if( client.connect(tcp_test, 8110) ){ 
+        Serial.println(F("\nGoing to take photo with current command:")); 
+        DisplayCurrentCommand(); 
+           
+        // Take Photo
+        ExecuteCommand(Command);
+        PhotoTakenCount++;
+      } else {
+        mqttClient.publish(mqtt_topic, "Can't connect to tcp server");
+      }
+    }
+    else if ((char)payload[0] == 'B' && (char)payload[1] == 'T'){
+      //Serial.println("Battery");
+      //Serial.println(readVcc());
+      String b = "Battery : " + readVcc();
+      mqttClient.publish(mqtt_topic, readVcc() + "");
+    } else {
+      
+    }
 }
 
-void reconnect() {
-  // Loop until we're reconnected
-  while (!mqttClient.connected()) {
-    Serial.print("Attempting MQTT connection...");
-    // Create a random client ID
-    String clientId = "2014";
-    String password = "6290";
-    clientId += String(random(0xffff), HEX);
-    // Attempt to connect
-    if (mqttClient.connect("SHSHSH", clientId.c_str(), password.c_str())) {
-      Serial.println("connected");
-      // Once connected, publish an announcement...
-      mqttClient.publish(mqtt_topic, "I'am Seunghyun");
-      // ... and resubscribe
-      mqttClient.subscribe(mqtt_topic);
-    } else {
-      Serial.print("failed, rc=");
-      Serial.print(mqttClient.state());
-      Serial.println(" try again in 5 seconds");
-      // Wait 5 seconds before retrying
-      delay(5000);
-    }
+boolean reconnect() {
+  Serial.println("mqtt reconnect");
+  client.stop();
+  
+  while ( wifi_status != WL_CONNECTED) {
+     Serial.print(".");
+     wifi_status = WiFi.begin(ssid, pass);
+     Serial.print(status);
   }
+  
+  if (mqttClient.connect("SHSHSH")) {
+    // Once connected, publish an announcement...
+    mqttClient.publish(mqtt_topic,"hello, I'am SengHyun");
+    if( isEnd ){
+      mqttClient.publish(mqtt_topic, "AT+IMGEND");
+      isEnd = false;
+    }
+    // ... and resubscribe
+    mqttClient.subscribe(mqtt_topic);
+  }
+  return mqttClient.connected();
 }
 ////////////////////
-
-void CreatePhotoInfoFile()
-{
-   // Creates the photo information file based on current settings
-   
-   // .txt information File for Photo
-   File InfoFile;
-   
-   // Create name of Photo To save based on certain parameters
-   String Filename = CreatePhotoInfoFilename();
-   
-   // Check if file already exists and remove it if it does.
-   CheckRemoveFile(Filename);
-  
-   // Open File
-   InfoFile = SD.open(Filename.c_str(), FILE_WRITE);
-   
-   // Test if file actually open
-   if (!InfoFile)
-   {
-     Serial.println(F("\nCritical ERROR ... Can not open Photo Info File for output ... "));
-     return;
-   } 
-  
-   // Write Info to file
-   String Data = CreatePhotoInfo();
-   InfoFile.println(Data);
-   
-   // Close SD Card File
-   InfoFile.close();
-}
 
 // Converts pin HIGH/LOW values on pins at positions 0-7 to a corresponding byte value
 byte ConvertPinValueToByteValue(int PinValue, int PinPosition)
@@ -2225,28 +2193,7 @@ void ReadTransmitCapturedFrame()
    
    //Serial.println(F("Starting Transmission of Photo To SDCard ..."));
    Serial.println(F("저장 테스트 ..."));
-   
-   //////////////////// Code for SD Card /////////////////////////////////
-   
-   // Image file to write to
-   /*File ImageOutputFile;
-   
-   // Create name of Photo To save based on certain parameters
-   String Filename = CreatePhotoFilename();
-   
-   // Check if file already exists and remove it if it does.
-   CheckRemoveFile(Filename);
   
-   ImageOutputFile = SD.open(Filename.c_str(), FILE_WRITE);*/
-   
-   // Test if file actually open
-   /*if (!ImageOutputFile)
-   {
-     Serial.println(F("\nCritical ERROR ... Can not open Image Ouput File for output ... "));
-     return;
-   }*/
-   ////////////////////////////////////////////////////////////////////////
-   
    // Set Read Buffer Pointer to start of frame
    digitalWrite(RRST, LOW);
    PulsePin(RCLK, 1); 
@@ -2255,7 +2202,8 @@ void ReadTransmitCapturedFrame()
    digitalWrite(RRST, HIGH);
    
    unsigned long  ByteCounter = 0;
-   String test = "";
+   //String test = "";
+   byte buff[1460];
    
    for (int height = 0; height < PHOTO_HEIGHT; height++)
    {
@@ -2282,30 +2230,36 @@ void ReadTransmitCapturedFrame()
         
          /////////////////////////////  SD Card ////////////////////////////////
          //ByteCounter = ByteCounter + ImageOutputFile.write(PixelData);
-         test += PixelData + ",";
+
+         if(ByteCounter == 0){
+          client.print("AT+IMGSTART");
+          isEnd = false;
+         }
+         else if(ByteCounter % 1460 == 0){
+          client.write(buff, sizeof(buff));
+          delay(5);
+         }
+         
+         buff[ByteCounter % 1460] = PixelData;
+         
          ByteCounter = ByteCounter + 1;     
          ///////////////////////////////////////////////////////////////////////
        }
      }
    }
+
+   client.print("AT+IMGEND");
+   isEnd = true;
+   
+   client.flush();
+   client.stop();
+   delay(1000);
+   
    Serial.println("");
-   Serial.println(test);
-   
-   // Close SD Card File
-   //ImageOutputFile.close();
-   
-   //Serial.print(F("Total Bytes Saved to SDCard = "));
-   //Serial.println(ByteCounter);
-   
-   // Write Photo's Info File to SDCard.
-   //Serial.println(F("Writing Photo's Info file (.txt file) to SD Card ..."));
-   //CreatePhotoInfoFile();
 }
 
 void TakePhoto()
 {
-  // Take Photo using the ov7670 camera and transmit the image to the Android controller via 
-  // Bluetooth
   unsigned long StartTime   = 0;
   unsigned long EndTime     = 0;
   unsigned long ElapsedTime = 0;
@@ -2479,63 +2433,6 @@ int OV7670ReadReg(int reg, byte *data)
   return (error);
 }
 
-void WriteFileTest(String Filename)
-{
-   File TempFile;
-  
-   TempFile = SD.open(Filename.c_str(), FILE_WRITE);
-   if (TempFile) 
-   {
-      Serial.print(F("Writing to testfile ..."));
-      TempFile.print(F("TEST CAMERA SDCARD HOOKUP At Time... "));
-      TempFile.print(millis()/1000);
-      TempFile.println(F(" Seconds"));
-      
-      TempFile.print(F("Photo Info Filename: "));
-      TempFile.println(CreatePhotoInfoFilename());
-      TempFile.print(F("Photo Info:"));
-      TempFile.println(CreatePhotoInfo());
-    
-      // close the file:
-      TempFile.close();
-      Serial.println(F("Writing File Done..."));
-   } 
-   else 
-   {
-      // if the file didn't open, print an error:
-      Serial.print(F("Error opening "));
-      Serial.println(Filename);
-   }
-}
-
-void ReadPrintFile(String Filename)
-{
-  File TempFile;
-  
-  // Reads in file and prints it to screen via Serial
-  TempFile = SD.open(Filename.c_str());
-  if (TempFile) 
-  {
-    Serial.print(Filename);
-    Serial.println(":");
-    
-    // read from the file until there's nothing else in it:
-    while (TempFile.available()) 
-    {
-        Serial.write(TempFile.read());
-    }
-    // close the file:
-    TempFile.close();
-  } 
-  else 
-  {
-    // Error opening file
-    Serial.print("Error opening ");
-    Serial.println(Filename);
-  }
-  
-}
-
 void initLED()
 {
   // Output pin initialization for the LEDs
@@ -2567,17 +2464,17 @@ void setup()
      
      Serial.println(F("Arduino SERIAL_MONITOR_CONTROLLED CAMERA ... Using ov7670 Camera"));
      Serial.println();
-
-     // WIFI Init
-     WiFi.init(&Serial1);
-
+     
      // WIFI CONNECT
+     WiFi.init(&Serial1);// WIFI Init
+     WiFi.begin(ssid, pass);
+     
+     Serial.println(ssid);
+     
      // attempt to connect to WiFi network
-      while (status != WL_CONNECTED) {
-        Serial.print("Attempting to connect to WPA SSID: ");
-        Serial.println(ssid);
-        // Connect to WPA/WPA2 network
-        status = WiFi.begin(ssid, pass);
+      while (WiFi.status() != WL_CONNECTED) {
+        //WiFi.init(&Serial1);
+        WiFi.begin(ssid, pass);
       }
 
         // you're connected now, so print out the data
@@ -2587,6 +2484,8 @@ void setup()
     
       mqttClient.setServer(mqtt_server, 1883);
       mqttClient.setCallback(callback);
+
+      reconnect();
 
      // LED TEST
      initLED();
@@ -2601,43 +2500,6 @@ void setup()
      Serial.println(F("FINISHED INITIALIZING CAMERA ..."));
      Serial.println();
      Serial.println();
-    
-                              
-    // Initialize SD Card
-    Serial.print(F("\nInitializing SD card..."));
-    pinMode(HardwareSSPin, OUTPUT);     // change this to 53 on a mega
-
-    if (!SD.begin(chipSelect))
-    {
-      Serial.println(F("Initialization failed ... /nThings to check:"));
-      Serial.println(F("- Is a card is inserted?"));
-      Serial.println(F("- Is your wiring correct?"));
-      Serial.println(F("- Did you change the chipSelect pin to match your shield or module?"));
-      return;
-    } else {
-       Serial.println(F("Wiring is correct and a card is present ..."));
-    }
-
-   Serial.println();
-   Serial.println();
-   Serial.println();
-   Serial.println(F("============================================================================="));
-   Serial.println();
-   Serial.println(F("Omnivision ov7670 FIFO Camera Image Capture Software Version 1.0"));
-   Serial.println(F("Copyright 2015 by Robert Chin.  All Rights Reserved."));
-   Serial.println();
-   Serial.println(F("This code to accompany the book entitled: "));
-   Serial.println(F("Beginning Arduino ov7670 Camera Development"));
-   Serial.println();
-   Serial.println(F("Please refer to the book for detailed explainations"));
-   Serial.println(F("of how to use this code, how to use the Omnivision "));
-   Serial.println(F("ov7670 camera as well as how to set up the camera with"));
-   Serial.println(F("the Arduino and an SD Card."));
-   Serial.println();
-   Serial.println(F("============================================================================="));
-   Serial.println(F("Type h or help for main help menu ..."));
-   Serial.println();
-   
 
 }
 
@@ -2919,39 +2781,30 @@ void DisplayCurrentCommand()
      Serial.println();
 }
 
-void CheckRemoveFile(String Filename)
-{
-   // Check if file already exists and remove it if it does.
-   char tempchar[50];
-   strcpy(tempchar, Filename.c_str());
-   
-   if (SD.exists(tempchar))
-   {
-     Serial.print(F("Filename: "));
-     Serial.print(tempchar);
-     Serial.println(F(" Already Exists. Removing It..."));
-     SD.remove(tempchar);
-   }
-   
-   // If file still exists then new image file cannot be saved to SD Card. 
-   if (SD.exists(tempchar))
-   {
-     Serial.println(F("Error.. Image output file cannot be created..."));
-     return;
-   }
-}
-
 
 void loop()
 { 
-  
-      if (!mqttClient.connected()) {
-        reconnect();
+    if (!mqttClient.connected()) {
+      long now = millis();
+      if (now - lastReconnectAttempt > 5000) {
+        lastReconnectAttempt = now;
+        // Attempt to reconnect
+        if (reconnect()) {
+          lastReconnectAttempt = 0;
+        }
       }
-      mqttClient.loop();  
+    } else {
+      // Client connected
+      mqttClient.loop();
+      delay(100);
+    }
+      
+      
+
+      
   
      // Wait for Command
-     Serial.println(F("Ready to Accept new Command => "));
+     /*Serial.println(F("Ready to Accept new Command => "));
      while (1)
      {
        if (Serial.available() > 0) 
@@ -2985,7 +2838,7 @@ void loop()
         DisplayCurrentCommand();       
      }
      else
-     if (RawCommandLine == "snapshot")
+     if (RawCommandLine == "s")
      {
          // Take Photo
          Serial.println(F("\nGoing to take photo with current command:")); 
@@ -3000,17 +2853,6 @@ void loop()
          Serial.println(Testfile);
          PhotoTakenCount++;
          
-     }
-     else
-     if (RawCommandLine == "testread")
-     {
-       ReadPrintFile("TEST.TXT");
-     }
-     else
-     if (RawCommandLine == "testwrite")
-     {
-       CheckRemoveFile("TEST.TXT");
-       WriteFileTest("TEST.TXT");
      }
      else
      {
@@ -3028,24 +2870,49 @@ void loop()
      
      Serial.println();
      Serial.println();
+     */
 }
 
-void printWifiStatus()
+void printWifiData()
 {
-  // print the SSID of the network you're attached to
-  Serial.print("SSID: ");
-  Serial.println(WiFi.SSID());
-
   // print your WiFi shield's IP address
   IPAddress ip = WiFi.localIP();
   Serial.print("IP Address: ");
   Serial.println(ip);
 
+  // print your MAC address
+  byte mac[6];
+  WiFi.macAddress(mac);
+  char buf[20];
+  sprintf(buf, "%02X:%02X:%02X:%02X:%02X:%02X", mac[5], mac[4], mac[3], mac[2], mac[1], mac[0]);
+  Serial.print("MAC address: ");
+  Serial.println(buf);
+}
+
+void printCurrentNet()
+{
+  // print the SSID of the network you're attached to
+  Serial.print("SSID: ");
+  Serial.println(WiFi.SSID());
+
+  // print the MAC address of the router you're attached to
+  byte bssid[6];
+  WiFi.BSSID(bssid);
+  char buf[20];
+  sprintf(buf, "%02X:%02X:%02X:%02X:%02X:%02X", bssid[5], bssid[4], bssid[3], bssid[2], bssid[1], bssid[0]);
+  Serial.print("BSSID: ");
+  Serial.println(buf);
+
   // print the received signal strength
   long rssi = WiFi.RSSI();
-  Serial.print("Signal strength (RSSI):");
-  Serial.print(rssi);
-  Serial.println(" dBm");
+  Serial.print("Signal strength (RSSI): ");
+  Serial.println(rssi);
+}
+
+void printWifiStatus()
+{
+  printCurrentNet();
+  printWifiData();
 }
 
 
