@@ -5,14 +5,15 @@
 
 #define _ESPLOGLEVEL_ 1
 
+const char* DEVICE_ID = "3";
+
 // NETWORK
 const char* ssid = "608-wifi";            // your network SSID (name)
 const char* pass = "19950729";        // your network password
-const char* mqtt_server = "192.168.0.17";
-//const char* mqtt_server = "52.194.252.52";
-const char* mqtt_topic = "topic";
-//const char* tcp_test = "52.194.252.52";
-const char* tcp_test = "192.168.0.17";
+const char* mqtt_server = "52.194.252.52";
+const char* mqtt_topic = "/Seoul/Dongjak/3";
+const char* tcp_test = "52.194.252.52";
+
 
 bool isEnd = false;
 int status = WL_IDLE_STATUS;     // the Wifi radio's status
@@ -83,9 +84,9 @@ ResolutionType Resolution = None;
 #define DO1   34
 #define DO0   35 
 
-#define Led_Red   2
-#define Led_Green 4
-#define Led_Blue  6
+#define Led_Red   42
+#define Led_Green 44
+#define Led_Blue  46
 
 // Register addresses and values
 #define CLKRC                 0x11 
@@ -2111,12 +2112,12 @@ void callback(char* topic, byte* payload, unsigned int length) {
     if ((char)payload[0] == 'A' && (char)payload[1] == 'T') {
       // Take Photo
       if( client.connect(tcp_test, 8110) ){ 
-        Serial.println(F("\nGoing to take photo with current command:")); 
-        DisplayCurrentCommand(); 
+        //Serial.println(F("\nGoing to take photo with current command:")); 
+        //DisplayCurrentCommand(); 
            
         // Take Photo
-        ExecuteCommand(Command);
-        PhotoTakenCount++;
+        //ExecuteCommand(Command);
+        //PhotoTakenCount++;
       } else {
         mqttClient.publish(mqtt_topic, "Can't connect to tcp server");
       }
@@ -2126,8 +2127,13 @@ void callback(char* topic, byte* payload, unsigned int length) {
       //Serial.println(readVcc());
       String b = "Battery : " + readVcc();
       mqttClient.publish(mqtt_topic, readVcc() + "");
-    } else {
-      
+    } 
+    else if((char)payload[0] == 'C' && (char)payload[1] == 'T' && (char)payload[2] == '+' ) {
+      turnLED(true);
+      mqttClient.publish(mqtt_topic, "ACT+");
+    } else if ((char)payload[0] == 'C' && (char)payload[1] == 'T' && (char)payload[2] == '-'){
+      turnLED(false);
+      mqttClient.publish(mqtt_topic, "ACT-");
     }
 }
 
@@ -2141,9 +2147,12 @@ boolean reconnect() {
      Serial.print(status);
   }
   
-  if (mqttClient.connect("SHSHSH")) {
+  if (mqttClient.connect(DEVICE_ID, "/stats/connected/3", 0, true, "0:/Seoul/Dongjak/3")) {
+    
     // Once connected, publish an announcement...
-    mqttClient.publish(mqtt_topic,"hello, I'am SengHyun");
+    mqttClient.publish(mqtt_topic,"AT+HELLO");
+    mqttClient.publish("/stats/connected/3", "1:/Seoul/Dongjak/3", true);
+    
     if( isEnd ){
       mqttClient.publish(mqtt_topic, "AT+IMGEND");
       isEnd = false;
@@ -2170,7 +2179,7 @@ byte ConvertPinValueToByteValue(int PinValue, int PinPosition)
 void ReadTransmitCapturedFrame()
 {
    // Read captured frame from FIFO memory and send each byte as it is read to the Android controller
-   // via bluetooth.
+   // via bluetooth
     
    // Set Output Enable OE to active (low).
    // * Make sure to connect the OE output to ground.
@@ -2491,7 +2500,7 @@ void setup()
      initLED();
     
      // Setup the OV7670 Camera for use in taking still photos
-     Wire.begin();
+     /*Wire.begin();
      Serial.println(F("----------------------------- Camera Registers ----------------------------"));
      ResetCameraRegisters();
      ReadRegisters();
@@ -2499,7 +2508,7 @@ void setup()
      SetupCamera();    
      Serial.println(F("FINISHED INITIALIZING CAMERA ..."));
      Serial.println();
-     Serial.println();
+     Serial.println();*/
 
 }
 
