@@ -4,6 +4,7 @@
 
 OV7670 (FIFO) + Mega2560 Pro + ESP01 을 이용해서 구성한 하드웨어입니다.
 
+(Result)[https://github.com/yourequiremorecitygas/hardware/blob/master/resources/result.png]
 
 
 
